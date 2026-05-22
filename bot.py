@@ -46,19 +46,11 @@ vector_memory = chroma_client.get_or_create_collection(name="relationship_histor
 
 tg_application = None
 
-# --- Local SQLite Caching Methods (Self-Repairing) ---
+# --- Local SQLite Caching Methods (V2) ---
 def init_sqlite():
-    conn = sqlite3.connect(f'{DATA_DIR}/short_term_chats.db')
+    # Looking for v2 completely bypasses the corrupted v1 file
+    conn = sqlite3.connect(f'{DATA_DIR}/chats_v2.db')
     cursor = conn.cursor()
-    
-    # Auto-detect and fix the corrupted GitHub database
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
-    if cursor.fetchone():
-        cursor.execute("PRAGMA table_info(messages)")
-        columns = [info[1] for info in cursor.fetchall()]
-        if 'timestamp' not in columns:
-            print("Corrupted database detected. Nuking and rebuilding...")
-            cursor.execute("DROP TABLE messages")
             
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
@@ -72,14 +64,14 @@ def init_sqlite():
     conn.close()
 
 def save_to_sqlite(chat_id, role, content):
-    conn = sqlite3.connect(f'{DATA_DIR}/short_term_chats.db')
+    conn = sqlite3.connect(f'{DATA_DIR}/chats_v2.db')
     cursor = conn.cursor()
     cursor.execute("INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)", (str(chat_id), role, content))
     conn.commit()
     conn.close()
 
 def get_short_term_history(chat_id, limit=25):
-    conn = sqlite3.connect(f'{DATA_DIR}/short_term_chats.db')
+    conn = sqlite3.connect(f'{DATA_DIR}/chats_v2.db')
     cursor = conn.cursor()
     cursor.execute('''
         SELECT role, content FROM (
@@ -113,7 +105,6 @@ def check_and_send_spontaneous_message():
     if not tg_application or not MY_CHAT_ID:
         return
 
-    # 25% chance to text Aditya when the 1.5 hour interval triggers
     if random.random() > 0.25:
         return
 
@@ -155,7 +146,7 @@ def check_and_send_spontaneous_message():
 def sync_local_history_to_firebase():
     if not firebase_admin._apps:
         return
-    conn = sqlite3.connect(f'{DATA_DIR}/short_term_chats.db')
+    conn = sqlite3.connect(f'{DATA_DIR}/chats_v2.db')
     cursor = conn.cursor()
     cursor.execute("SELECT id, chat_id, role, content, timestamp FROM messages WHERE synced_to_cloud = 0")
     unsynced_rows = cursor.fetchall()
@@ -263,4 +254,4 @@ if __name__ == '__main__':
     
     print("Worker engine active. Sanskruti is online 24/7...")
     tg_application.run_polling()
-        
+    
