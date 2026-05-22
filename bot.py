@@ -39,17 +39,27 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 MY_CHAT_ID = os.getenv("MY_TELEGRAM_CHAT_ID")
 
 ai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-voice_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+voice_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY")) if os.getenv("ELEVENLABS_API_KEY") else None
 
 chroma_client = chromadb.PersistentClient(path=f"{DATA_DIR}/relationship_vector_space")
 vector_memory = chroma_client.get_or_create_collection(name="relationship_history")
 
 tg_application = None
 
-# --- Local SQLite Caching Methods ---
+# --- Local SQLite Caching Methods (Self-Repairing) ---
 def init_sqlite():
     conn = sqlite3.connect(f'{DATA_DIR}/short_term_chats.db')
     cursor = conn.cursor()
+    
+    # Auto-detect and fix the corrupted GitHub database
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(messages)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'timestamp' not in columns:
+            print("Corrupted database detected. Nuking and rebuilding...")
+            cursor.execute("DROP TABLE messages")
+            
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,7 +227,7 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_to_sqlite(chat_id, "model", reply_text)
 
-    if requires_audio:
+    if requires_audio and voice_client and ELEVENLABS_VOICE_ID:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
         try:
             audio_stream = voice_client.generate(
@@ -253,4 +263,4 @@ if __name__ == '__main__':
     
     print("Worker engine active. Sanskruti is online 24/7...")
     tg_application.run_polling()
-  
+        
