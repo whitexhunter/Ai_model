@@ -18,7 +18,7 @@ from firebase_admin import credentials, firestore
 
 load_dotenv()
 
-DATA_DIR = "data"
+DATA_DIR = "memory_v3"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # --- Cloud Firebase Credentials Injection ---
