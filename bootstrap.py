@@ -1,77 +1,70 @@
 import os
 import json
 import chromadb
-from dotenv import load_dotenv
 
-load_dotenv()
-DATA_DIR = "data"
+# Connect to the exact same vector database as bot.py
+DATA_DIR = "memory_data"
+os.makedirs(DATA_DIR, exist_ok=True)
+chroma_client = chromadb.PersistentClient(path=f"{DATA_DIR}/vector_space")
+vector_memory = chroma_client.get_or_create_collection(name="relationship_history")
 
-# The script will look for this exact file in your root folder
-JSON_FILE_PATH = "message_1.json" 
-
-def fix_encoding(text):
-    """Fixes Meta's broken emoji and special character encoding."""
+def fix_insta_encoding(text):
+    """Instagram JSON exports have broken UTF-8 encoding. This fixes emojis and apostrophes."""
     try:
-        return text.encode('latin1').decode('utf8')
+        return text.encode('latin1').decode('utf-8')
     except:
         return text
 
-def bootstrap_base_memory():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    chroma_client = chromadb.PersistentClient(path=f"{DATA_DIR}/relationship_vector_space")
-    vector_memory = chroma_client.get_or_create_collection(name="relationship_history")
-
-    if vector_memory.count() > 0:
-        print(f"Vector space already contains {vector_memory.count()} records. Skipping bootstrap.")
+def load_messages():
+    if not os.path.exists("message_1.json"):
+        print("Error: message_1.json not found in the current directory!")
         return
 
-    if not os.path.exists(JSON_FILE_PATH):
-        print(f"Error: Could not find {JSON_FILE_PATH} in the directory.")
-        return
-
-    print("Parsing Instagram JSON logs directly into permanent vector space...")
-    with open(JSON_FILE_PATH, 'r', encoding='utf-8') as f:
+    with open("message_1.json", "r", encoding="utf-8") as f:
         data = json.load(f)
-        
-    messages = data.get('messages', [])
-    messages.reverse() # Flip the array so the timeline goes oldest to newest
-    
-    documents, ids, metadatas = [], [], []
-    valid_count = 0
+
+    # Instagram JSONs are usually newest-first. Reverse to process chronologically.
+    messages = data.get("messages", [])
+    messages.reverse() 
+
+    documents = []
+    ids = []
+    count = 0
+
+    print(f"Found {len(messages)} messages. Processing...")
 
     for msg in messages:
-        if 'content' not in msg:
-            continue # Skip image/reel attachments that don't have text
-            
-        raw_sender = msg.get('sender_name', '')
-        sender_lower = fix_encoding(raw_sender).lower().strip()
-        content = fix_encoding(msg.get('content', ''))
-        content = content.replace('\n', ' ')
-        
-        # Matches exact IG handles AND display names to be 100% accurate
-        if sender_lower == "_unknown_3622" or "aditya" in sender_lower or "rathod" in sender_lower:
-            speaker_tag = "Aditya"
-        elif sender_lower == "dark_choco2425" or "sanskruti" in sender_lower or "jadhav" in sender_lower:
-            speaker_tag = "Sanskruti"
-        else:
-            continue
-            
-        documents.append(f"[{speaker_tag}]: {content}")
-        metadatas.append({"speaker": speaker_tag})
-        ids.append(f"hist_{valid_count}")
-        valid_count += 1
+        if "content" in msg and "sender_name" in msg:
+            raw_text = msg["content"]
+            raw_sender = msg["sender_name"]
 
-        # Batch inserts to keep the database stable
-        if len(documents) >= 100:
-            vector_memory.add(documents=documents, metadatas=metadatas, ids=ids)
-            documents, ids, metadatas = [], [], []
+            # Fix the text encoding
+            clean_text = fix_insta_encoding(raw_text)
 
-    # Insert any remaining messages
-    if documents:
-        vector_memory.add(documents=documents, metadatas=metadatas, ids=ids)
+            # Assign Speaker (Matches your name in the Instagram JSON)
+            speaker = "Aditya" if "Aditya" in raw_sender else "Sanskruti"
+
+            # Format it exactly how bot.py expects to read it
+            doc_string = f"[{speaker}]: {clean_text}"
+            
+            documents.append(doc_string)
+            ids.append(f"historical_chat_{count}")
+            count += 1
+
+    if count == 0:
+        print("No valid text messages found. Check the JSON format.")
+        return
+
+    # Insert into ChromaDB in chunks to avoid overloading the memory
+    batch_size = 500
+    for i in range(0, len(documents), batch_size):
+        batch_docs = documents[i:i+batch_size]
+        batch_ids = ids[i:i+batch_size]
         
-    print(f"Success! Memorized {valid_count} historical message blocks permanently.")
+        vector_memory.add(documents=batch_docs, ids=batch_ids)
+        print(f"Loaded messages {i} to {i + len(batch_docs)} into vector memory...")
+
+    print(f"\nSuccess! {count} permanent memories injected. You can start bot.py now.")
 
 if __name__ == '__main__':
-    bootstrap_base_memory()
-    
+    load_messages()
